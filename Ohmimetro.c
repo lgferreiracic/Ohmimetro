@@ -5,8 +5,10 @@
 #include "pico/bootrom.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
+#include "hardware/clocks.h"
 #include "lib/ssd1306.h"
 #include "lib/font.h"
+#include "ws2812.pio.h"
 
 #define I2C_PORT i2c1
 #define I2C_SDA 14
@@ -14,12 +16,22 @@
 #define ADRESS 0x3C
 #define ADC_PIN 28
 #define BUTTON_B 6
+#define WS2812_PIN 7
 #define REFERENCE 10000
 #define ADC_VREF 3.31
 #define ADC_RESOLUTION 4095
+#define NUM_PIXELS 25
+
+typedef struct {
+    double R; 
+    double G; 
+    double B; 
+} RGB;
 
 volatile uint32_t button_b_time = 0;
 ssd1306_t ssd;
+PIO pio; 
+uint sm; 
 float resistance = 0.0;
 float mean = 0.0;
 int first_band = 0;
@@ -59,12 +71,19 @@ float find_e24_nearest(float resistance) {
         }
     }
 
-    int commercialResistance = (int)(resistance + 0.5);
+    int commercialResistance = nearest_value;
     first_band = commercialResistance / 10;
     second_band = commercialResistance % 10;
     margin_error = (nearest_value - resistance) / nearest_value * 100.0f;
     margin_error = fabs(margin_error);
 
+    printf("Resistance: %.2f Ohm\n", resistance);
+    printf("Nearest E24: %.2f Ohm\n", nearest_value);
+    printf("First Band: %d\n", first_band);
+    printf("Second Band: %d\n", second_band);
+    printf("Multiplier: %d\n", multiplier);
+    printf("Margin of Error: %.2f%%\n", margin_error);
+    
     return nearest_value * pow(10, multiplier);
 }
 
@@ -77,23 +96,10 @@ bool debounce(volatile uint32_t *last_time){
     return false;
 }
 
-void gpio_irq_handler(uint gpio, uint32_t events){
-  if(gpio == BUTTON_B) {
-    static volatile uint32_t last_time = 0;
-    if (debounce(&last_time)) {
-        printf("Button pressed\n");
-        ssd1306_fill(&ssd, false);
-        ssd1306_send_data(&ssd);
-        reset_usb_boot(0, 0);
-    }
-  }
-}
-
 void button_init() {
     gpio_init(BUTTON_B);
     gpio_set_dir(BUTTON_B, GPIO_IN);
     gpio_pull_up(BUTTON_B);
-    gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 }
 
 void display_init() {
@@ -107,6 +113,130 @@ void display_init() {
     ssd1306_config(&ssd);
     ssd1306_fill(&ssd, false);
     ssd1306_send_data(&ssd);
+}
+
+uint matrix_init() {
+    pio = pio0; 
+    uint offset = pio_add_program(pio, &pio_matrix_program);
+    sm = pio_claim_unused_sm(pio, true);
+    pio_matrix_program_init(pio, sm, offset, WS2812_PIN);
+}
+
+uint32_t matrix_rgb(double r, double g, double b){
+   unsigned char R, G, B;
+   R = r * 255;
+   G = g * 255;
+   B = b * 255;
+   return (G << 24) | (R << 16) | (B << 8);
+ }
+ 
+void set_leds(PIO pio, uint sm, double r, double g, double b) {
+     uint32_t valor_led;
+     for (int16_t i = 0; i < NUM_PIXELS; i++) {
+         valor_led = matrix_rgb(r, g, b);
+         pio_sm_put_blocking(pio, sm, valor_led);
+     }
+ }
+ 
+int getIndex(int x, int y) {
+    if (y % 2 == 0) {
+        return 24-(y * 5 + x); 
+    } else {
+        return 24-(y * 5 + (4 - x)); 
+    }
+}
+
+void desenho_pio(RGB pixels[NUM_PIXELS], PIO pio, uint sm) {
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        int x = i % 5;
+        int y = i / 5;
+        int index = getIndex(x, y);
+        pio_sm_put_blocking(pio, sm, matrix_rgb(pixels[index].R, pixels[index].G, pixels[index].B));
+    }
+}
+
+RGB select_band_color(int band) {
+    switch (band) {
+        case 0: return (RGB){0, 0, 0}; // Black
+        case 1: return (RGB){0.07, 0.025, 0}; // Brown
+        case 2: return (RGB){0.1, 0, 0}; // Red
+        case 3: return (RGB){0.05, 0.005, 0}; // Orange
+        case 4: return (RGB){0.1, 0.1, 0}; // Yellow
+        case 5: return (RGB){0, 0.1, 0}; // Green
+        case 6: return (RGB){0, 0, 0.1}; // Blue
+        case 7: return (RGB){0.05, 0, 0.05}; // Purple
+        case 8: return (RGB){0.005, 0.005, 0.005}; // Gray
+        case 9: return (RGB){0.1, 0.1, 0.1}; // White
+        default: return (RGB){0.1, 0.1, 0.1}; // Default to white if invalid band
+    }
+}
+
+void show_matrix() {
+    RGB pixels[NUM_PIXELS];
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        int x = i % 5;
+        int y = i / 5;
+        int index = getIndex(x, y);
+        if(i < 5) {
+            pixels[index] = select_band_color(multiplier);
+        } else if(i < 15) {
+            pixels[index] = select_band_color(second_band);
+        } else { 
+            pixels[index] = select_band_color(first_band);
+        }
+    }
+    desenho_pio(pixels, pio, sm);
+}
+
+void test_matrix() {
+    RGB pixels[NUM_PIXELS];
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        int x = i % 5;
+        int y = i / 5;
+        int index = getIndex(x, y);
+        if(i < 5) {
+            pixels[index] = (RGB){0.01, 0.0084, 0}; // Gold   
+        } else if(i < 10) {
+            pixels[index] = (RGB){0.07, 0.025, 0}; // Brown
+        } else if(i < 15) {
+            pixels[index] = (RGB){0.05, 0.005, 0}; // Orange
+        } else if(i < 20) {
+            pixels[index] = (RGB){0.1, 0.1, 0}; // Yellow
+        } else { 
+            pixels[index] = (RGB){0.1, 0, 0}; // Red
+        }
+    }
+    desenho_pio(pixels, pio, sm);
+}
+
+void test_matrix2() {
+    RGB pixels[NUM_PIXELS];
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        int x = i % 5;
+        int y = i / 5;
+        int index = getIndex(x, y);
+        if(i < 5) {
+            pixels[index] = (RGB){0, 0.1, 0}; // Green
+        } else if(i < 10) {
+            pixels[index] = (RGB){0, 0, 0.1}; // Blue
+        } else if(i < 15) {
+            pixels[index] = (RGB){0.05, 0, 0.05}; // Purple
+        } else if(i < 20) {
+            pixels[index] = (RGB){0.005, 0.005, 0.005}; // Gray
+        } else { 
+            pixels[index] = (RGB){0.1, 0.1, 0.1}; // White
+        }
+    }
+    desenho_pio(pixels, pio, sm);
+}
+
+void clear_matrix(){
+    RGB BLACK = {0, 0, 0}; 
+    RGB pixels[NUM_PIXELS];
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        pixels[i] = BLACK;
+    }
+    desenho_pio(pixels, pio0, 0);
 }
 
 void read_adc() {
@@ -151,17 +281,33 @@ void show_display() {
     
     ssd1306_send_data(&ssd);
 }
+
+void gpio_irq_handler(uint gpio, uint32_t events){
+    if(gpio == BUTTON_B) {
+        static volatile uint32_t last_time = 0;
+        if (debounce(&last_time)) {
+            printf("Button pressed\n");
+            ssd1306_fill(&ssd, false);
+            ssd1306_send_data(&ssd);
+            clear_matrix();
+            reset_usb_boot(0, 0);
+        }
+    }
+}
   
 int main(){
     stdio_init_all();
     button_init();
+    gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
     display_init();
+    matrix_init();
     adc_init();
     adc_gpio_init(ADC_PIN);
 
     while (true) {
         read_adc();
         show_display();
+        show_matrix();
         sleep_ms(1000);
     }
 }
