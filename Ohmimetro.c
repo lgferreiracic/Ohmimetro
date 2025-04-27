@@ -10,6 +10,7 @@
 #include "lib/font.h"
 #include "ws2812.pio.h"
 
+//Constantes
 #define I2C_PORT i2c1
 #define I2C_SDA 14
 #define I2C_SCL 15
@@ -22,12 +23,14 @@
 #define ADC_RESOLUTION 4095
 #define NUM_PIXELS 25
 
+//Estrutura para armazenar os valores RGB
 typedef struct {
     double R; 
     double G; 
     double B; 
 } RGB;
 
+//Variaveis globais
 volatile uint32_t button_b_time = 0;
 ssd1306_t ssd;
 PIO pio; 
@@ -39,16 +42,19 @@ int second_band = 0;
 int multiplier = 0;
 float margin_error = 0.0;
 
+//Valores E24
 const float E24[] = {
     10, 11, 12, 13, 15, 16, 18, 20, 22, 24, 27, 30,
     33, 36, 39, 43, 47, 51, 56, 62, 68, 75, 82, 91
-  };
-  
+};
+
+//Definindo os valores de cor para cada faixa
 const char* colors[] = {
     "Black", "Brown", "Red", "Orange", "Yellow",
     "Green", "Blue", "Purple", "Gray", "White",
 };
 
+//Função para encontrar o valor E24 mais próximo
 float find_e24_nearest(float resistance) {
     multiplier = 0;
     while (resistance >= 100) {
@@ -83,10 +89,11 @@ float find_e24_nearest(float resistance) {
     printf("Second Band: %d\n", second_band);
     printf("Multiplier: %d\n", multiplier);
     printf("Margin of Error: %.2f%%\n", margin_error);
-    
+
     return nearest_value * pow(10, multiplier);
 }
 
+//Função de debounce para evitar múltiplas leituras do botão
 bool debounce(volatile uint32_t *last_time){
     uint32_t current_time = to_ms_since_boot(get_absolute_time());
     if (current_time - *last_time > 250){ 
@@ -96,12 +103,14 @@ bool debounce(volatile uint32_t *last_time){
     return false;
 }
 
+//Função de inicialização do botão
 void button_init() {
     gpio_init(BUTTON_B);
     gpio_set_dir(BUTTON_B, GPIO_IN);
     gpio_pull_up(BUTTON_B);
 }
 
+//Função de inicialização do display OLED SSD1306
 void display_init() {
     i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
@@ -115,6 +124,7 @@ void display_init() {
     ssd1306_send_data(&ssd);
 }
 
+//Função para inicializar a matriz de LEDs WS2812
 uint matrix_init() {
     pio = pio0; 
     uint offset = pio_add_program(pio, &pio_matrix_program);
@@ -122,22 +132,16 @@ uint matrix_init() {
     pio_matrix_program_init(pio, sm, offset, WS2812_PIN);
 }
 
+//Função para obter o valor RGB em formato uint32_t
 uint32_t matrix_rgb(double r, double g, double b){
    unsigned char R, G, B;
    R = r * 255;
    G = g * 255;
    B = b * 255;
    return (G << 24) | (R << 16) | (B << 8);
- }
- 
-void set_leds(PIO pio, uint sm, double r, double g, double b) {
-     uint32_t valor_led;
-     for (int16_t i = 0; i < NUM_PIXELS; i++) {
-         valor_led = matrix_rgb(r, g, b);
-         pio_sm_put_blocking(pio, sm, valor_led);
-     }
- }
- 
+}
+
+//Função para obter o índice pixel na matriz de LEDs
 int getIndex(int x, int y) {
     if (y % 2 == 0) {
         return 24-(y * 5 + x); 
@@ -146,6 +150,7 @@ int getIndex(int x, int y) {
     }
 }
 
+//Função para desenhar os pixels na matriz de LEDs
 void desenho_pio(RGB pixels[NUM_PIXELS], PIO pio, uint sm) {
     for (int i = 0; i < NUM_PIXELS; i++) {
         int x = i % 5;
@@ -155,6 +160,7 @@ void desenho_pio(RGB pixels[NUM_PIXELS], PIO pio, uint sm) {
     }
 }
 
+//Função para selecionar a cor da faixa com base no número da faixa
 RGB select_band_color(int band) {
     switch (band) {
         case 0: return (RGB){0, 0, 0}; // Black
@@ -171,6 +177,7 @@ RGB select_band_color(int band) {
     }
 }
 
+//Função para mostrar a matriz de LEDs com as cores das faixas
 void show_matrix() {
     RGB pixels[NUM_PIXELS];
     for (int i = 0; i < NUM_PIXELS; i++) {
@@ -188,48 +195,7 @@ void show_matrix() {
     desenho_pio(pixels, pio, sm);
 }
 
-void test_matrix() {
-    RGB pixels[NUM_PIXELS];
-    for (int i = 0; i < NUM_PIXELS; i++) {
-        int x = i % 5;
-        int y = i / 5;
-        int index = getIndex(x, y);
-        if(i < 5) {
-            pixels[index] = (RGB){0.01, 0.0084, 0}; // Gold   
-        } else if(i < 10) {
-            pixels[index] = (RGB){0.07, 0.025, 0}; // Brown
-        } else if(i < 15) {
-            pixels[index] = (RGB){0.05, 0.005, 0}; // Orange
-        } else if(i < 20) {
-            pixels[index] = (RGB){0.1, 0.1, 0}; // Yellow
-        } else { 
-            pixels[index] = (RGB){0.1, 0, 0}; // Red
-        }
-    }
-    desenho_pio(pixels, pio, sm);
-}
-
-void test_matrix2() {
-    RGB pixels[NUM_PIXELS];
-    for (int i = 0; i < NUM_PIXELS; i++) {
-        int x = i % 5;
-        int y = i / 5;
-        int index = getIndex(x, y);
-        if(i < 5) {
-            pixels[index] = (RGB){0, 0.1, 0}; // Green
-        } else if(i < 10) {
-            pixels[index] = (RGB){0, 0, 0.1}; // Blue
-        } else if(i < 15) {
-            pixels[index] = (RGB){0.05, 0, 0.05}; // Purple
-        } else if(i < 20) {
-            pixels[index] = (RGB){0.005, 0.005, 0.005}; // Gray
-        } else { 
-            pixels[index] = (RGB){0.1, 0.1, 0.1}; // White
-        }
-    }
-    desenho_pio(pixels, pio, sm);
-}
-
+//Função para limpar a matriz de LEDs
 void clear_matrix(){
     RGB BLACK = {0, 0, 0}; 
     RGB pixels[NUM_PIXELS];
@@ -239,6 +205,7 @@ void clear_matrix(){
     desenho_pio(pixels, pio0, 0);
 }
 
+//Função para realizar a leitura do ADC
 void read_adc() {
     adc_select_input(2);
     float sum = 0.0f;
@@ -250,6 +217,7 @@ void read_adc() {
     resistance = (REFERENCE * mean) / (ADC_RESOLUTION - mean);
 }
 
+//Função para mostrar os dados no display OLED
 void show_display() {
     char str_adc_value[5], str_resistance[5], str_margin_error[5];
     char str_first_band[10], str_second_band[10], str_multiplier[10];
@@ -282,6 +250,7 @@ void show_display() {
     ssd1306_send_data(&ssd);
 }
 
+//Função de interrupção para o botão
 void gpio_irq_handler(uint gpio, uint32_t events){
     if(gpio == BUTTON_B) {
         static volatile uint32_t last_time = 0;
