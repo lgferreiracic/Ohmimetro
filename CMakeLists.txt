@@ -61,7 +61,10 @@ target_link_libraries(Ohmimetro
         pico_stdlib 
         hardware_i2c
         hardware_adc
+        hardware_pio
+        hardware_clocks
         )
 
 pico_add_extra_outputs(Ohmimetro)
 
+pico_generate_pio_header(Ohmimetro ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
