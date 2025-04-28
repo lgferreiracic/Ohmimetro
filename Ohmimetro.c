@@ -57,13 +57,18 @@ const char* colors[] = {
 //Função para encontrar o valor E24 mais próximo
 float find_e24_nearest(float resistance) {
     multiplier = 0;
-    while (resistance >= 100) {
-        resistance /= 10;
+    while (resistance >= 100.0) {
+        resistance /= 10.0;
         multiplier++;
     }
-    while (resistance < 10) {
-        resistance *= 10;
+    while (resistance < 10.0 && resistance > 0.0) {
+        resistance *= 10.0;
         multiplier--;
+    }
+
+    if(resistance > 95.5){
+        resistance = 10.0;
+        multiplier++;
     }
 
     float nearest_value = E24[0];
